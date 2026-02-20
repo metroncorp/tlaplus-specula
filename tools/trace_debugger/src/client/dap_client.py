@@ -44,7 +44,12 @@ class DAPClient:
         if args: msg["arguments"] = args
         body = json.dumps(msg)
         full = f"Content-Length: {len(body)}\r\n\r\n{body}"
-        self.sock.sendall(full.encode('utf-8'))
+        try:
+            self.sock.sendall(full.encode('utf-8'))
+        except (BrokenPipeError, OSError) as e:
+            logger.info(f"Connection lost while sending '{command}': {e}")
+            self.connected = False
+            return None
         self.seq += 1
         return self.seq - 1
 
@@ -93,6 +98,8 @@ class DAPClient:
     def request(self, command, args=None):
         """Synchronous request that processes events while waiting."""
         req_seq = self.send("request", command, args)
+        if req_seq is None:
+            return None
         start_time = time.time()
         while time.time() - start_time < 10: # 10s timeout per request
             if req_seq in self.pending_responses:

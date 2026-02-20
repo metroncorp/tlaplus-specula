@@ -208,6 +208,11 @@ class DebugSession:
                 logger.warning(f"Timeout reached after {timeout}s")
                 break
 
+            # Check if TLC is still connected
+            if not self.client.connected:
+                logger.info("TLC connection lost, ending debug loop")
+                break
+
             # Get next event
             event = self.client.get_event()
             if not event:
@@ -263,8 +268,13 @@ class DebugSession:
                             except Exception as e:
                                 logger.error(f"Error in breakpoint callback: {e}")
 
-                # Always continue execution after stopped
+                # Continue execution after stopped
                 self.client.request("continue", {})
+
+                # If TLC closed the connection (finished), stop the loop
+                if not self.client.connected:
+                    logger.info("TLC connection lost after continue, execution finished")
+                    break
 
             elif event_type == "terminated":
                 logger.info("TLC execution terminated")
