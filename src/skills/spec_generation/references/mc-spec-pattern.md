@@ -1,0 +1,56 @@
+# MC Spec Pattern
+
+Template and methodology for writing model checking specs that wrap the base spec with counter-bounded actions.
+
+> **Note**: Examples reference Raft as an illustrative case study. Adapt action names, constants, and bounds to your target system.
+
+## Purpose
+
+The MC spec enables exhaustive state space exploration by bounding non-deterministic actions, adding symmetry reduction, and defining structural invariants and temporal properties.
+
+## Structure
+
+1. **EXTENDS base spec** + `INSTANCE base` for original operator access (needed because cfg overrides operators)
+2. **Counter variables** — one counter per fault-injection action, stored in a single record
+3. **Constrained wrappers** — guard + original action + counter increment
+4. **Unconstrained actions** — deterministic/reactive actions pass through with `UNCHANGED faultVars`
+5. **MCInit** — base Init + counter initialization
+6. **MCNext** — all wrappers grouped (async per-server actions, crash actions, message actions)
+7. **Symmetry and view** — `Permutations(Server)`, exclude counters from view
+8. **State space pruning** — message buffer constraint
+9. **Invariants and temporal properties**
+
+## Which Actions to Bound
+
+**Bound**: actions that *introduce* non-determinism (timeout, client request, crash, message loss, heartbeat, disk block, config change).
+
+**Don't bound**: actions that *react* to existing state (message handlers, become leader, advance commit index, complete persist, drop stale message).
+
+## Config Pattern
+
+Use operator overrides (`<-`) to inject counter constraints:
+
+```
+Timeout       <- MCTimeout
+Crash         <- MCCrash
+ClientRequest <- MCClientRequest
+...
+```
+
+## Tuning Constants
+
+Start in the 2-8 range per constant. Too small misses bugs; increase one constant at a time if needed. State space grows exponentially.
+
+| Constant | Recommended | Notes |
+|----------|-------------|-------|
+| MaxTermLimit | 4 | Most bugs manifest within 3-4 terms |
+| MaxTimeoutLimit | 5 | Multiple elections needed for some bugs |
+| RequestLimit | 3 | Log entries for commit advancement |
+| CrashLimit | 2 | Crash-recovery bugs need at least 1 |
+| LoseLimit | 3 | Network partition simulation |
+| HeartbeatLimit | 6 | Lease/contact bugs need multiple heartbeats |
+| MaxMsgBufferLimit | 8-12 | Too low prunes valid states |
+
+## Example
+
+See `case-studies/hashicorp-raft/scenarios/base/spec/MChashiraft.tla` and `MChashiraft.cfg` for a complete MC spec with 7 counter-bounded actions, structural invariants, and temporal properties.
