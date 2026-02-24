@@ -41,10 +41,11 @@ from typing import Optional, Set, Dict, List, Tuple
 # Default paths (relative to script location)
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_TLA_JAR = SCRIPT_DIR.parent / "lib" / "tla2tools.jar"
+DEFAULT_COMMUNITY_JAR = SCRIPT_DIR.parent / "lib" / "CommunityModules-deps.jar"
 
 # Regex to parse TLC coverage output
 COVERAGE_PATTERN = re.compile(
-    r"line (\d+), col (\d+) to line (\d+), col (\d+) of module (\w+): (\d+)"
+    r"line (\d+), col (\d+) to line (\d+), col (\d+) of module (\w+)>?:\s*(\d+)"
 )
 
 
@@ -77,18 +78,27 @@ def parse_exclude_range(spec: str) -> Tuple[str, int, int]:
 
 def run_tlc(spec_dir: Path, spec_file: str, config_file: str,
             tla_jar: Path, trace_file: Optional[Path] = None,
-            timeout: int = 300) -> str:
+            timeout: int = 300, community_jar: Optional[Path] = None) -> str:
     """Run TLC with coverage enabled."""
     env = os.environ.copy()
     if trace_file:
         env["JSON"] = str(trace_file)
 
+    # Build classpath: tla2tools.jar + optional CommunityModules (absolute paths)
+    cp = str(tla_jar.resolve())
+    if community_jar and community_jar.exists():
+        cp = f"{tla_jar.resolve()}:{community_jar.resolve()}"
+
     cmd = [
-        "java", "-jar", str(tla_jar),
+        "java", "-cp", cp, "tlc2.TLC",
         "-coverage", "0",
         "-config", config_file,
-        spec_file
+        "-noTE",
     ]
+    # For trace validation, suppress deadlock checking (trace terminates naturally)
+    if trace_file:
+        cmd.append("-deadlock")
+    cmd.append(spec_file)
 
     result = subprocess.run(
         cmd, cwd=spec_dir, env=env,
@@ -137,7 +147,8 @@ def parse_coverage(output: str, modules: Set[str], exclude_ranges: Dict[str, Lis
 
 def analyze_traces(spec_dir: Path, trace_dir: Path, spec_file: str, config_file: str,
                    tla_jar: Path, modules: Set[str], exclude_ranges: Dict[str, List[Tuple[int, int]]],
-                   top_level_only: bool, timeout: int, verbose: bool) -> CoverageResult:
+                   top_level_only: bool, timeout: int, verbose: bool,
+                   community_jar: Optional[Path] = None) -> CoverageResult:
     """Analyze coverage across multiple trace files."""
     trace_files = sorted(trace_dir.glob("*.ndjson"))
     if verbose:
@@ -149,7 +160,8 @@ def analyze_traces(spec_dir: Path, trace_dir: Path, spec_file: str, config_file:
         if verbose:
             print(f"[{i:2d}/{len(trace_files)}] {tf.name}...", end=" ", flush=True)
         try:
-            output = run_tlc(spec_dir, spec_file, config_file, tla_jar, tf, timeout)
+            output = run_tlc(spec_dir, spec_file, config_file, tla_jar, tf, timeout,
+                             community_jar=community_jar)
             if "Model checking completed" not in output and "states generated" not in output:
                 if verbose:
                     print("FAILED")
@@ -233,6 +245,8 @@ def main():
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
                                      epilog=__doc__)
     parser.add_argument("--tla-jar", default=str(DEFAULT_TLA_JAR), help="Path to tla2tools.jar")
+    parser.add_argument("--community-jar", default=str(DEFAULT_COMMUNITY_JAR),
+                        help="Path to CommunityModules-deps.jar")
     parser.add_argument("--timeout", type=int, default=300, help="TLC timeout in seconds")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -276,6 +290,7 @@ def main():
 
     args = parser.parse_args()
     tla_jar = Path(args.tla_jar)
+    community_jar = Path(args.community_jar)
 
     if args.cmd == "trace":
         exclude = defaultdict(list)
@@ -287,7 +302,8 @@ def main():
             Path(args.spec_dir), Path(args.trace_dir),
             args.spec_file, args.config_file, tla_jar,
             set(args.modules), dict(exclude),
-            not args.all, args.timeout, not args.quiet
+            not args.all, args.timeout, not args.quiet,
+            community_jar=community_jar
         )
         print_result(result, "TRACE VALIDATION COVERAGE")
 
